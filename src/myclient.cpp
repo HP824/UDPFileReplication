@@ -67,38 +67,40 @@ class SWPChunk {
 		}
 };
 
-class SWP {
-	private:
-		int _mtu;
-		int _winsz;
-		int _sockfd;
-		std::string _filename;
-		std::ifstream _input_file;
-		sockaddr_in *_server_addr;
+class SWPQueue {
+	public:	
 		std::map<uint32_t, auto_ptr<SWPChunk>> _chunks;
-    	uint32_t _seq_num;
-		bool _eof;
 	public:
-		SWP(int mtu, int winsz, int sockfd, const char *filename, sockaddr_in *server_addr);
-		int open_file();
-		int close_file();
-		int read_chunks();
-		int send_chunk_data();
-		int recv_chunk_ack();
-		int addEOFBlock();
 		int size() {
 			return _chunks.size();
 		}
 };
 
-SWP::SWP(
-		int mtu, int winsz, int sockfd, const char *filename, sockaddr_in *server_addr) : 
-	    _mtu(mtu), _winsz(winsz), _sockfd(sockfd), _filename(filename), _server_addr(server_addr) {
+class SWPReader {
+	private:
+		int _mtu;
+		int _winsz;
+		std::string _filename;
+		std::ifstream _input_file;
+    	uint32_t _seq_num;
+		bool _eof;
+		SWPQueue *_queue;
+	public:
+		SWPReader(int mtu, int winsz, const char *filename, SWPQueue *queue);
+		int open_file();
+		int close_file();
+		int read_chunks();
+		int addEOFBlock();
+};
+
+SWPReader::SWPReader(
+		int mtu, int winsz, const char *filename, SWPQueue *queue) : 
+	    _mtu(mtu), _winsz(winsz), _filename(filename), _queue(queue) {
 	_seq_num = 0;
 	_eof = false;
 }
 
-int SWP::open_file() {
+int SWPReader::open_file() {
     // Open input file
 	_input_file.open(_filename, std::ios::binary);
     if (!_input_file.is_open()) {
@@ -108,15 +110,15 @@ int SWP::open_file() {
 	return 0;
 }
 
-int SWP::close_file() {
+int SWPReader::close_file() {
 	_input_file.close();
 	return 0;
 }
 
-int SWP::read_chunks() {
+int SWPReader::read_chunks() {
 	dprintf("in read_chunks()\n");
 	uint16_t cmd = CMD_DATA;
-	while((int)_chunks.size() < _winsz) {
+	while((int)_queue->_chunks.size() < _winsz) {
 		if(_eof)
 			break;
 		auto_ptr<SWPChunk> send_buffer(new SWPChunk(_mtu, 0));
@@ -139,37 +141,55 @@ int SWP::read_chunks() {
         memcpy(send_buffer->chunk.data(), &cmd, sizeof(uint16_t));
         memcpy(send_buffer->chunk.data() + sizeof(uint16_t), &_seq_num, sizeof(uint32_t));
 		
-		_chunks[_seq_num] = send_buffer;
+		_queue->_chunks[_seq_num] = send_buffer;
 		
 		_seq_num++;
 	}
 	return 0;
 }
 
-int SWP::addEOFBlock() {
+int SWPReader::addEOFBlock() {
 	uint16_t cmd = CMD_DATA;
 	auto_ptr<SWPChunk> send_buffer(new SWPChunk(_mtu, 0));
 	send_buffer->chunk_size = sizeof(uint16_t) + sizeof(uint32_t);
     memcpy(send_buffer->chunk.data(), &cmd, sizeof(uint16_t));
     memcpy(send_buffer->chunk.data() + sizeof(uint16_t), &_seq_num, sizeof(uint32_t));
-	_chunks[_seq_num] = send_buffer;
+	_queue->_chunks[_seq_num] = send_buffer;
 	return 0;
 }
 
-int SWP::send_chunk_data() {
+class SWPSender {
+	private:
+		int _mtu;
+		int _winsz;
+		int _sockfd;
+		sockaddr_in *_server_addr;
+		SWPQueue *_queue;
+	public:
+		SWPSender(int mtu, int winsz, int sockfd, sockaddr_in *server_addr, SWPQueue *queue);
+		int send_chunk_data();
+		int recv_chunk_ack();
+};
+
+SWPSender::SWPSender(
+		int mtu, int winsz, int sockfd, sockaddr_in *server_addr, SWPQueue *queue) : 
+	    _mtu(mtu), _winsz(winsz), _sockfd(sockfd), _server_addr(server_addr), _queue(queue) {
+}
+
+int SWPSender::send_chunk_data() {
 	dprintf("in send_chunk_data()\n");
 	uint32_t basesn = 0;
-	if(_chunks.begin() != _chunks.end()) {
-		basesn = _chunks.begin()->first;
+	if(_queue->_chunks.begin() != _queue->_chunks.end()) {
+		basesn = _queue->_chunks.begin()->first;
 	}
-	for(std::map<uint32_t, auto_ptr<SWPChunk>>::iterator it=_chunks.begin(); 
-			it!=_chunks.end(); ++it) {
+	for(std::map<uint32_t, auto_ptr<SWPChunk>>::iterator it=_queue->_chunks.begin(); 
+			it!=_queue->_chunks.end(); ++it) {
 		auto_ptr<SWPChunk>& send_buffer = it->second;
 		
 		uint32_t nextsn = 0;
 		std::map<uint32_t, auto_ptr<SWPChunk>>::iterator nextit = it;
 		nextit++;
-		if(nextit != _chunks.end()) {
+		if(nextit != _queue->_chunks.end()) {
 			nextsn = nextit->first;
 		}
 
@@ -194,14 +214,14 @@ int SWP::send_chunk_data() {
 	return 0;
 }
 
-int SWP::recv_chunk_ack() {
+int SWPSender::recv_chunk_ack() {
 	setRecvTimeout(_sockfd, 5);
 
 	uint32_t basesn = 0;
-	if(_chunks.begin() != _chunks.end()) {
-		basesn = _chunks.begin()->first;
+	if(_queue->_chunks.begin() != _queue->_chunks.end()) {
+		basesn = _queue->_chunks.begin()->first;
 	}
-	while(this->size() > 0) {
+	while(_queue->size() > 0) {
 		dprintf("waiting for ack\n");
 		std::vector<char> recv_buffer(_mtu);	
 		ssize_t bytes_received = recvfrom(_sockfd, recv_buffer.data(), _mtu, 0,
@@ -229,24 +249,24 @@ int SWP::recv_chunk_ack() {
 			return -1;
 		}
 
-		std::map<uint32_t, auto_ptr<SWPChunk>>::iterator it = _chunks.find(received_seq_number);
+		std::map<uint32_t, auto_ptr<SWPChunk>>::iterator it = _queue->_chunks.find(received_seq_number);
 
-		if(it == _chunks.end()) {
+		if(it == _queue->_chunks.end()) {
 			perror("Invalid Sequence Number in ACK Packet\n");
 		} else {
 			uint32_t nextsn = 0;
 			std::map<uint32_t, auto_ptr<SWPChunk>>::iterator nextit = it;
 			nextit++;
-			if(nextit != _chunks.end()) {
+			if(nextit != _queue->_chunks.end()) {
 				nextsn = nextit->first;
 			}
 			cout << currentRFC3339Time() << ", ACK, " << it->first << ", " << basesn << ", " << nextsn << ", " << basesn + _winsz <<  endl;
-			_chunks.erase(it);
+			_queue->_chunks.erase(it);
 		}
 	}
 	dprintf("received chunk ack complete\n");
-	for(std::map<uint32_t, auto_ptr<SWPChunk>>::iterator it=_chunks.begin(); 
-			it!=_chunks.end(); ++it) {
+	for(std::map<uint32_t, auto_ptr<SWPChunk>>::iterator it=_queue->_chunks.begin(); 
+			it!=_queue->_chunks.end(); ++it) {
 		// cout << "it->first: " << it->first << endl;
 		auto_ptr<SWPChunk>& send_buffer = it->second;
 		if(send_buffer->retry_cnt == 5) {
@@ -329,7 +349,6 @@ int checkFile(const char* file_path) {
 	return 0;
 }
 
-
 int main(int argc, char *argv[]) {
     if (argc != 7) {
         std::cerr << "Usage: ./myclient <server_ip> <server_port> <mtu> <winsz> <in_file> <out_file>" << std::endl;
@@ -387,8 +406,11 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;	
 	}
 
-	SWP swp(mtu, winsz, client_socket, input_file_path.c_str(), &server_addr);
-	ret_val = swp.open_file();
+	SWPQueue queue;
+	SWPReader swp_reader(mtu, winsz, input_file_path.c_str(), &queue);
+	SWPSender swp_sender(mtu, winsz, client_socket, &server_addr, &queue);
+
+	ret_val = swp_reader.open_file();
 	if(ret_val < 0) {
 		std::cerr << "Error: Cannot open input file '" << input_file_path << "'." << std::endl;
         close(client_socket);
@@ -397,7 +419,7 @@ int main(int argc, char *argv[]) {
 	
 	bool eof = false;
 	while(1) {
-		ret_val = swp.read_chunks();
+		ret_val = swp_reader.read_chunks();
 		dprintf("read chunks\n");
 		if(ret_val < 0) {
 			std::cerr << "read chunk data failure" << std::endl;
@@ -405,23 +427,23 @@ int main(int argc, char *argv[]) {
 			return EXIT_FAILURE;		
 		}
 
-		if(eof == false && swp.size() == 0) {
-			swp.addEOFBlock();
+		if(eof == false && queue.size() == 0) {
+			swp_reader.addEOFBlock();
 			eof = true;
 		}
 
-		if(eof == true && swp.size() == 0) {
+		if(eof == true && queue.size() == 0) {
 			break;
 		}
 
-		ret_val = swp.send_chunk_data();
+		ret_val = swp_sender.send_chunk_data();
 		if(ret_val < 0) {
 			std::cerr << "send chunk data failure" << std::endl;
         	close(client_socket);
         	return EXIT_FAILURE;
 		}
 		
-		ret_val = swp.recv_chunk_ack();
+		ret_val = swp_sender.recv_chunk_ack();
 		if(ret_val < 0) {
 			// cerr << "receive ACK failure" << std::endl;
         	close(client_socket);
@@ -429,7 +451,7 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	swp.close_file();
+	swp_reader.close_file();
 
     close(client_socket);
 
