@@ -595,7 +595,7 @@ sender_thread(void *arg) {
 		if(swp_sender.chunks_sent == 0 && param->queue->isEOF())
 			break;
 		if(swp_sender.chunks_sent == 0) {
-			usleep(50000);
+			usleep(100000);
 			continue;
 		}
 		
