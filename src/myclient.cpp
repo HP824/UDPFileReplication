@@ -77,7 +77,7 @@ class SWPChunk {
 			recv_ack_bits[sender_id] = flag;
 		}
 		bool isChunkSent() {
-			for(int i = 0; i < recv_ack_bits.size(); i++) {
+			for(ssize_t i = 0; i < (ssize_t)recv_ack_bits.size(); i++) {
 				if(recv_ack_bits[i] == false)
 					return false;
 			}
@@ -268,7 +268,7 @@ int SWPSender::send_chunk_data() {
 			nextsn = nextit->first;
 		}
 
-		dprintf("send buffer length: %u\n", send_buffer->chunk_size);
+		dprintf("send buffer length: %lu\n", send_buffer->chunk_size);
 
 		if(send_buffer->retry_cnt != 0) {
 			cerr << "Packet loss detected" << endl;
@@ -339,24 +339,10 @@ int SWPSender::recv_chunk_ack() {
 				nextsn = nextit->first;
 			}
 			cout << currentRFC3339Time() << ", ACK, " << it->first << ", " << basesn << ", " << nextsn << ", " << basesn + _winsz <<  endl;
-			// _queue->_chunks.erase(it);
 			queue_size--;
 			it->second->setAckBit(_sender_id, true);
 		}
 	}
-	/* 
-	dprintf("received chunk ack complete\n");
-	for(std::map<uint32_t, auto_ptr<SWPChunk>>::iterator it=_queue->_chunks.begin(); 
-			it!=_queue->_chunks.end(); ++it) {
-		// cout << "it->first: " << it->first << endl;
-		auto_ptr<SWPChunk>& send_buffer = it->second;
-		if(send_buffer->retry_cnt == 5) {
-			cerr << "Reached max re-transmission limit" << endl;
-			return -1;
-		}
-	}
-	dprintf("retransmission check complete\n"); 
-	*/
 	return 0;
 }
 
@@ -388,7 +374,7 @@ int sendPutPacket(int sockfd, sockaddr_in *server_addr, const char *filename) {
 		return -1;
     }
 
-	if(bytes_received < sizeof(uint16_t) + sizeof(uint32_t)) {
+	if(bytes_received < (ssize_t)(sizeof(uint16_t) + sizeof(uint32_t))) {
 		perror("Unexpected Buffer Size\n");
 		return -1;
 	}
@@ -457,7 +443,6 @@ reader_thread(void *arg) {
 	int ret_val = swp_reader.open_file();
 	if(ret_val < 0) {
 		cerr << "Error: Cannot open input file '" << param->infile_path << "'." << endl;
-        // close(client_socket);
         return NULL;
 	}
 	
@@ -471,7 +456,6 @@ reader_thread(void *arg) {
 
 		if(ret_val < 0) {
 			std::cerr << "R: read chunk data failure" << std::endl;
-			// close(client_socket);
 			return NULL;		
 		}
 
@@ -483,7 +467,6 @@ reader_thread(void *arg) {
 
 		pthread_mutex_lock(&(param->queue->queue_mutex));
 		dprintf("R: signalling sender\n");
-		// param->queue->setReady(true);
 		pthread_cond_signal(&(param->queue->sender_cond));
 		pthread_mutex_unlock(&(param->queue->queue_mutex));
 
@@ -492,23 +475,9 @@ reader_thread(void *arg) {
 			break;
 		}
 
-		/* 
-		ret_val = swp_sender.send_chunk_data();
-		if(ret_val < 0) {
-			std::cerr << "send chunk data failure" << std::endl;
-        	// close(client_socket);
-        	return NULL;
-		}
-		
-		ret_val = swp_sender.recv_chunk_ack();
-		if(ret_val < 0) {
-			// cerr << "receive ACK failure" << std::endl;
-        	close(client_socket);
-        	return EXIT_FAILURE;
-		} 
-		*/
 		dprintf("R: waiting on reader cond\n");
-
+		
+		// delete all sent chunks
 		pthread_mutex_lock(&(param->queue->queue_mutex));
 		dprintf("R: acquired lock\n");
 		pthread_cond_wait(&(param->queue->reader_cond), &(param->queue->queue_mutex));
@@ -516,14 +485,6 @@ reader_thread(void *arg) {
 		pthread_mutex_unlock(&(param->queue->queue_mutex));
 
 		dprintf("R: reader cond signalled\n");
-
-		// delete all sent chunks
-		// param->queue->deleteSentChunks();
-
-		/* if(eof == true && param->queue->size() == 0) {
-			dprintf("EOF reached, queue size is 0, breaking loop\n");
-			break;
-		} */
 	}
 
 	swp_reader.close_file();
@@ -583,12 +544,9 @@ sender_thread(void *arg) {
 
 		if(param->queue->size() == 0 && param->queue->isEOF())
 			break;
-		// pthread_mutex_lock(&(param->queue->queue_mutex));
 		ret_val = swp_sender.send_chunk_data();
-		// pthread_mutex_unlock(&(param->queue->queue_mutex));
 		if(ret_val < 0) {
-			std::cerr << "S: send chunk data failure" << std::endl;
-        	// close(client_socket);
+			cerr << "S: send chunk data failure" << endl;
         	return NULL;
 		}
 
@@ -601,7 +559,7 @@ sender_thread(void *arg) {
 		
 		ret_val = swp_sender.recv_chunk_ack();
 		if(ret_val < 0) {
-			// cerr << "receive ACK failure" << std::endl;
+			dprintf("receive ACK failure");
         	close(client_socket);
         	return NULL;
 		}
@@ -627,7 +585,7 @@ int main(int argc, char *argv[]) {
     std::string input_file_path = argv[5];
 	std::string output_file_path = argv[6];
 
-    if (mtu <= sizeof(uint16_t) + sizeof(uint32_t)) {
+    if(mtu <= (int)(sizeof(uint16_t) + sizeof(uint32_t))) {
         std::cerr << "Required minimum MTU is " << sizeof(uint16_t) + sizeof(uint32_t) + 1 << std::endl;
         return EXIT_FAILURE;
     }
@@ -685,57 +643,7 @@ int main(int argc, char *argv[]) {
 			handle_error_en(s, "pthread_join for sender");
 	}
 	
-	/*
-	SWPReader swp_reader(mtu, winsz, input_file_path.c_str(), &queue);
-	SWPSender swp_sender(mtu, winsz, client_socket, &server_addr, &queue);
-	
-	ret_val = swp_reader.open_file();
-	if(ret_val < 0) {
-		std::cerr << "Error: Cannot open input file '" << input_file_path << "'." << std::endl;
-        close(client_socket);
-        return EXIT_FAILURE;
-	}
-	
-	bool eof = false;
-	while(1) {
-		ret_val = swp_reader.read_chunks();
-		dprintf("read chunks\n");
-		if(ret_val < 0) {
-			std::cerr << "read chunk data failure" << std::endl;
-			close(client_socket);
-			return EXIT_FAILURE;		
-		}
-
-		if(eof == false && queue.size() == 0) {
-			swp_reader.addEOFBlock();
-			eof = true;
-		}
-
-		if(eof == true && queue.size() == 0) {
-			break;
-		}
-
-		ret_val = swp_sender.send_chunk_data();
-		if(ret_val < 0) {
-			std::cerr << "send chunk data failure" << std::endl;
-        	close(client_socket);
-        	return EXIT_FAILURE;
-		}
-		
-		ret_val = swp_sender.recv_chunk_ack();
-		if(ret_val < 0) {
-			// cerr << "receive ACK failure" << std::endl;
-        	close(client_socket);
-        	return EXIT_FAILURE;
-		}
-	}
-
-	swp_reader.close_file();
-
-    close(client_socket);
-	*/
-
-    std::cout << "File transfer completed successfully!" << std::endl;
+    cout << "File transfer completed successfully!" << endl;
     return EXIT_SUCCESS;
 }
 
