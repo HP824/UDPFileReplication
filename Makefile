@@ -1,6 +1,6 @@
 # Compiler and flags
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -Wno-deprecated-declarations
+CXXFLAGS = -std=c++17 -g -Wall -Wextra -Wno-deprecated-declarations
 
 # Directories
 SRC_DIR = src
