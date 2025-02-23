@@ -591,6 +591,9 @@ sender_thread(void *arg) {
         	// close(client_socket);
         	return NULL;
 		}
+
+		if(swp_sender.chunks_sent == 0 && param->queue->isEOF())
+			break;
 		if(swp_sender.chunks_sent == 0) {
 			usleep(50000);
 			continue;
@@ -607,6 +610,7 @@ sender_thread(void *arg) {
 		usleep(10000);
 	}
 	close(client_socket);
+	dprintf("S: sender completed successfully\n");
 	return NULL;
 }
 
@@ -634,7 +638,7 @@ int main(int argc, char *argv[]) {
 	}
 	
 	
-	int sender_count = 1;
+	int sender_count = 2;
 	SWPQueue queue(sender_count);
 	reader_param r_param = {mtu, winsz, input_file_path, &queue};
 
@@ -657,8 +661,8 @@ int main(int argc, char *argv[]) {
 		s_param[i].mtu = mtu;
 		s_param[i].winsz = winsz;
 		s_param[i].server_ip = server_ip;
-		s_param[i].server_port = server_port;
-		s_param[i].outfile_path = output_file_path;
+		s_param[i].server_port = server_port + i;
+		s_param[i].outfile_path = output_file_path + "." + to_string(i);
 		s_param[i].queue = &queue;
 
 		s = pthread_create(&s_param[i].sender_tid, &attr, &sender_thread, &s_param[i]);
