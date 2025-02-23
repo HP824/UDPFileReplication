@@ -290,7 +290,7 @@ int SWPSender::send_chunk_data() {
 }
 
 int SWPSender::recv_chunk_ack() {
-	setRecvTimeout(_sockfd, 5);
+	setRecvTimeout(_sockfd, 1);
 
 	uint32_t basesn = 0;
 	if(_queue->_chunks.begin() != _queue->_chunks.end()) {
@@ -583,9 +583,9 @@ sender_thread(void *arg) {
 
 		if(param->queue->size() == 0 && param->queue->isEOF())
 			break;
-		pthread_mutex_lock(&(param->queue->queue_mutex));
+		// pthread_mutex_lock(&(param->queue->queue_mutex));
 		ret_val = swp_sender.send_chunk_data();
-		pthread_mutex_unlock(&(param->queue->queue_mutex));
+		// pthread_mutex_unlock(&(param->queue->queue_mutex));
 		if(ret_val < 0) {
 			std::cerr << "S: send chunk data failure" << std::endl;
         	// close(client_socket);
