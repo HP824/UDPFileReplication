@@ -83,6 +83,10 @@ class SWPChunk {
 			}
 			return true;
 		}
+
+		bool isAckSet(int sender_id) {
+			return recv_ack_bits[sender_id];
+		}
 };
 
 class SWPQueue {
@@ -231,6 +235,8 @@ class SWPSender {
 		sockaddr_in *_server_addr;
 		SWPQueue *_queue;
 	public:
+		int chunks_sent;
+	public:
 		SWPSender(int sender_id, int mtu, int winsz, int sockfd, sockaddr_in *server_addr, SWPQueue *queue);
 		int send_chunk_data();
 		int recv_chunk_ack();
@@ -247,10 +253,14 @@ int SWPSender::send_chunk_data() {
 	if(_queue->_chunks.begin() != _queue->_chunks.end()) {
 		basesn = _queue->_chunks.begin()->first;
 	}
+	chunks_sent = 0;
+
 	for(std::map<uint32_t, auto_ptr<SWPChunk>>::iterator it=_queue->_chunks.begin(); 
 			it!=_queue->_chunks.end(); ++it) {
 		auto_ptr<SWPChunk>& send_buffer = it->second;
-		
+		if(it->second->isAckSet(_sender_id))
+			continue;
+		chunks_sent++;
 		uint32_t nextsn = 0;
 		std::map<uint32_t, auto_ptr<SWPChunk>>::iterator nextit = it;
 		nextit++;
@@ -286,7 +296,10 @@ int SWPSender::recv_chunk_ack() {
 	if(_queue->_chunks.begin() != _queue->_chunks.end()) {
 		basesn = _queue->_chunks.begin()->first;
 	}
-	while(_queue->size() > 0) {
+
+	int queue_size = chunks_sent;
+
+	while(queue_size > 0) {
 		dprintf("waiting for ack\n");
 		std::vector<char> recv_buffer(_mtu);	
 		ssize_t bytes_received = recvfrom(_sockfd, recv_buffer.data(), _mtu, 0,
@@ -327,6 +340,7 @@ int SWPSender::recv_chunk_ack() {
 			}
 			cout << currentRFC3339Time() << ", ACK, " << it->first << ", " << basesn << ", " << nextsn << ", " << basesn + _winsz <<  endl;
 			// _queue->_chunks.erase(it);
+			queue_size--;
 			it->second->setAckBit(_sender_id, true);
 		}
 	}
@@ -469,6 +483,7 @@ reader_thread(void *arg) {
 
 		pthread_mutex_lock(&(param->queue->queue_mutex));
 		dprintf("R: signalling sender\n");
+		// param->queue->setReady(true);
 		pthread_cond_signal(&(param->queue->sender_cond));
 		pthread_mutex_unlock(&(param->queue->queue_mutex));
 
@@ -497,12 +512,13 @@ reader_thread(void *arg) {
 		pthread_mutex_lock(&(param->queue->queue_mutex));
 		dprintf("R: acquired lock\n");
 		pthread_cond_wait(&(param->queue->reader_cond), &(param->queue->queue_mutex));
+		param->queue->deleteSentChunks();
 		pthread_mutex_unlock(&(param->queue->queue_mutex));
 
 		dprintf("R: reader cond signalled\n");
 
 		// delete all sent chunks
-		param->queue->deleteSentChunks();
+		// param->queue->deleteSentChunks();
 
 		/* if(eof == true && param->queue->size() == 0) {
 			dprintf("EOF reached, queue size is 0, breaking loop\n");
@@ -559,7 +575,7 @@ sender_thread(void *arg) {
 		dprintf("S: checking queue\n");
 		pthread_mutex_lock(&(param->queue->queue_mutex));
 		dprintf("S: acquired queue lock\n");
-	   // 	while(/*param->queue->size() == 0 &&*/ !param->queue->isEOF())
+	    while(param->queue->size() == 0 && !param->queue->isEOF())
 			pthread_cond_wait(&(param->queue->sender_cond), &(param->queue->queue_mutex));
 		dprintf("S: sender cond signalled\n");
 		pthread_mutex_unlock(&(param->queue->queue_mutex));
@@ -567,11 +583,17 @@ sender_thread(void *arg) {
 
 		if(param->queue->size() == 0 && param->queue->isEOF())
 			break;
+		pthread_mutex_lock(&(param->queue->queue_mutex));
 		ret_val = swp_sender.send_chunk_data();
+		pthread_mutex_unlock(&(param->queue->queue_mutex));
 		if(ret_val < 0) {
 			std::cerr << "S: send chunk data failure" << std::endl;
         	// close(client_socket);
         	return NULL;
+		}
+		if(swp_sender.chunks_sent == 0) {
+			usleep(50000);
+			continue;
 		}
 		
 		ret_val = swp_sender.recv_chunk_ack();
@@ -582,6 +604,7 @@ sender_thread(void *arg) {
 		}
 		dprintf("S: signalling reader\n");
 		pthread_cond_signal(&(param->queue->reader_cond));
+		usleep(10000);
 	}
 	close(client_socket);
 	return NULL;
