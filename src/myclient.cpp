@@ -98,7 +98,7 @@ class SWPChunk {
 
 class SWPQueue {
 	public:	
-		std::map<uint32_t, auto_ptr<SWPChunk>> _chunks;
+		std::map<uint32_t, shared_ptr<SWPChunk>> _chunks;
 		pthread_cond_t reader_cond;
 		pthread_cond_t sender_cond;
 		pthread_mutex_t queue_mutex;
@@ -113,7 +113,7 @@ class SWPQueue {
 		}
 		int size2(int sender_id) {
 			int count = 0;
-			map<uint32_t, auto_ptr<SWPChunk>>::iterator it;
+			map<uint32_t, shared_ptr<SWPChunk>>::iterator it;
 			for(it = _chunks.begin(); it != _chunks.end(); it++) {
 				if(!it->second->isAckSet(sender_id))
 					count++;
@@ -129,9 +129,9 @@ class SWPQueue {
 		}
 		int deleteSentChunks() {
 			dprintf("deleting sent chunks\n");
-			map<uint32_t, auto_ptr<SWPChunk>>::iterator it;
+			map<uint32_t, shared_ptr<SWPChunk>>::iterator it;
 			for(it = _chunks.begin(); it != _chunks.end();) {
-				map<uint32_t, auto_ptr<SWPChunk>>::iterator it2 = it;
+				map<uint32_t, shared_ptr<SWPChunk>>::iterator it2 = it;
 				it++;
 				// dprintf("checking chunk %u\n", it2->first);
 				if(it2->second->isChunkSent()) {
@@ -143,7 +143,7 @@ class SWPQueue {
 			dprintf("received chunk ack complete\n");
 			for(it=_chunks.begin(); it!=_chunks.end(); ++it) {
 				cout << "it->first: " << it->first << endl;
-				auto_ptr<SWPChunk>& send_buffer = it->second;
+				shared_ptr<SWPChunk> send_buffer = it->second;
 				if(send_buffer->getRetryCount() == 5) {
 					cerr << "Reached max re-transmission limit" << endl;
 					return -1;
@@ -209,7 +209,7 @@ int SWPReader::read_chunks() {
 	while((int)_queue->_chunks.size() < _winsz) {
 		if(_eof)
 			break;
-		auto_ptr<SWPChunk> send_buffer(new SWPChunk(_mtu, 0, _queue->_sender_count));
+		shared_ptr<SWPChunk> send_buffer(new SWPChunk(_mtu, 0, _queue->_sender_count));
 
         _input_file.read(send_buffer->chunk.data() + sizeof(uint16_t) + sizeof(uint32_t), 
 						_mtu - sizeof(uint16_t) - sizeof(uint32_t));
@@ -239,7 +239,7 @@ int SWPReader::read_chunks() {
 int SWPReader::addEOFBlock() {
 	dprintf("adding EOF Block\n");
 	uint16_t cmd = CMD_DATA;
-	auto_ptr<SWPChunk> send_buffer(new SWPChunk(_mtu, 0, _queue->_sender_count));
+	shared_ptr<SWPChunk> send_buffer(new SWPChunk(_mtu, 0, _queue->_sender_count));
 	send_buffer->chunk_size = sizeof(uint16_t) + sizeof(uint32_t);
     memcpy(send_buffer->chunk.data(), &cmd, sizeof(uint16_t));
     memcpy(send_buffer->chunk.data() + sizeof(uint16_t), &_seq_num, sizeof(uint32_t));
@@ -276,14 +276,14 @@ int SWPSender::send_chunk_data() {
 	}
 	chunks_sent = 0;
 
-	for(std::map<uint32_t, auto_ptr<SWPChunk>>::iterator it=_queue->_chunks.begin(); 
+	for(std::map<uint32_t, shared_ptr<SWPChunk>>::iterator it=_queue->_chunks.begin(); 
 			it!=_queue->_chunks.end(); ++it) {
-		auto_ptr<SWPChunk>& send_buffer = it->second;
+		shared_ptr<SWPChunk> send_buffer = it->second;
 		if(it->second->isAckSet(_sender_id))
 			continue;
 		chunks_sent++;
 		uint32_t nextsn = 0;
-		std::map<uint32_t, auto_ptr<SWPChunk>>::iterator nextit = it;
+		std::map<uint32_t, shared_ptr<SWPChunk>>::iterator nextit = it;
 		nextit++;
 		if(nextit != _queue->_chunks.end()) {
 			nextsn = nextit->first;
@@ -350,13 +350,13 @@ int SWPSender::recv_chunk_ack() {
 			return -3;
 		}
 
-		std::map<uint32_t, auto_ptr<SWPChunk>>::iterator it = _queue->_chunks.find(received_seq_number);
+		std::map<uint32_t, shared_ptr<SWPChunk>>::iterator it = _queue->_chunks.find(received_seq_number);
 
 		if(it == _queue->_chunks.end()) {
 			perror("Invalid Sequence Number in ACK Packet\n");
 		} else {
 			uint32_t nextsn = 0;
-			std::map<uint32_t, auto_ptr<SWPChunk>>::iterator nextit = it;
+			std::map<uint32_t, shared_ptr<SWPChunk>>::iterator nextit = it;
 			nextit++;
 			if(nextit != _queue->_chunks.end()) {
 				nextsn = nextit->first;
