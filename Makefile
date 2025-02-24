@@ -21,7 +21,7 @@ $(BIN_DIR):
 
 # Build the client binary
 $(CLIENT_BIN): $(CLIENT_SRC)
-	$(CXX) $(CXXFLAGS) -o $@ $<
+	$(CXX) $(CXXFLAGS) -o $@ $< -lpthread
 
 # Build the server binary
 $(SERVER_BIN): $(SERVER_SRC)

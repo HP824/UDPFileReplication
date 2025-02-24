@@ -92,7 +92,7 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  uint32_t seed = arc4random();
+  uint32_t seed = rand();
   srand(seed);
 
   int server_socket = socket(AF_INET, SOCK_DGRAM, 0);
