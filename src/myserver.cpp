@@ -137,6 +137,9 @@ int main(int argc, char *argv[]) {
         break;
       }
 
+	  char *cli_ip = inet_ntoa(client_addr.sin_addr);
+	  int cli_port = ntohs(client_addr.sin_port);
+
       // dprintf("Bytes received: %ld\n", bytes_received);
 
       uint16_t cmd;
@@ -157,11 +160,13 @@ int main(int argc, char *argv[]) {
 
         int random = rand() % 100;
         if (random < droppc) {
-          std::cout << currentRFC3339Time() << ", DROP DATA, " << received_seq_num << std::endl;
+          std::cout << currentRFC3339Time() << ", " << port << ", " << cli_ip
+			  << ", " << cli_port << ", DROP DATA, " << received_seq_num << std::endl;
           continue;
         }
 
-        std::cout << currentRFC3339Time() << ", DATA, " << received_seq_num << std::endl;
+        std::cout << currentRFC3339Time() << ", " << port << ", " << cli_ip
+			  << ", " << cli_port  << ", DATA, " << received_seq_num << std::endl;
         if (bytes_received > (ssize_t)(sizeof(uint16_t) + sizeof(uint32_t))) {
           received_chunks[received_seq_num] = std::vector<char>(
               recv_buffer.begin() + sizeof(uint16_t) + sizeof(uint32_t),
@@ -174,11 +179,13 @@ int main(int argc, char *argv[]) {
 
 	  int random2 = rand() % 100;
 	  if (random2 < droppc) {
-	    std::cout << currentRFC3339Time() << ", DROP ACK, " << received_seq_num << std::endl;
+	    std::cout << currentRFC3339Time() << ", " << port << ", " << cli_ip
+			  << ", " << cli_port << ", DROP ACK, " << received_seq_num << std::endl;
 	    continue;
 	  }
 
-	  std::cout << currentRFC3339Time() << ", ACK, " << received_seq_num << std::endl;
+	  std::cout << currentRFC3339Time() << ", " << port << ", " << cli_ip
+			  << ", " << cli_port << ", ACK, " << received_seq_num << std::endl;
       memcpy(send_buffer.data(), &ack_cmd, sizeof(uint16_t));
       memcpy(send_buffer.data() + sizeof(uint16_t), &received_seq_num,
              sizeof(uint32_t));
