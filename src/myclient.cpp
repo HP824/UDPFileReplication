@@ -139,16 +139,18 @@ class SWPQueue {
 					// dprintf("  deleting chunk\n");  
 				}
 			}
-			// dprintf("received chunk ack complete\n");
+			/* 
+			dprintf("received chunk ack complete\n");
 			for(it=_chunks.begin(); it!=_chunks.end(); ++it) {
-				// cout << "it->first: " << it->first << endl;
+				cout << "it->first: " << it->first << endl;
 				auto_ptr<SWPChunk>& send_buffer = it->second;
-				/*if(send_buffer->getRetryCount() == 5) {
+				if(send_buffer->getRetryCount() == 5) {
 					cerr << "Reached max re-transmission limit" << endl;
 					return -1;
-				}*/
+				}
 			}
-			// dprintf("retransmission check complete\n");
+			dprintf("retransmission check complete\n");
+			*/
 			return 0;
 		}
 };
@@ -291,6 +293,10 @@ int SWPSender::send_chunk_data() {
 
 		if(send_buffer->getRetryCount(_sender_id) != 0) {
 			cerr << "Packet loss detected" << endl;
+		}
+		if(send_buffer->getRetryCount(_sender_id) == 5) {
+			it->second->setAckBit(_sender_id, true);
+			continue;
 		}
 
 		std::cout << currentRFC3339Time() << ", DATA, " << it->first << ", " << basesn << ", " << nextsn << ", " << basesn + _winsz <<  endl;
