@@ -11,6 +11,8 @@
 #include <vector>
 #include <ctime>
 
+using namespace std;
+
 #define dprintf printf
 
 constexpr uint16_t CMD_PUT = 1;
@@ -72,13 +74,18 @@ int checkFileAccess(const char *file_path) {
 }
 
 int main(int argc, char *argv[]) {
-  if (argc != 3) {
-    std::cerr << "Usage: ./myserver <port> <droppc>" << std::endl;
+  if (argc != 4) {
+    std::cerr << "Usage: ./myserver <port> <droppc> <root_folder_path>" << std::endl;
     return EXIT_FAILURE;
   }
 
   int port = std::stoi(argv[1]);
   int droppc = std::stoi(argv[2]);
+  std::string root_path = argv[3];
+
+  if(root_path.back() != '/') {
+  	root_path.push_back('/');
+  }
 
   if (droppc < 0 || droppc > 100) {
     perror("Invalid droppc");
@@ -138,8 +145,10 @@ int main(int argc, char *argv[]) {
       uint32_t received_seq_num;
       if (cmd == CMD_PUT) {
         received_seq_num = 0;
-        output_file_path.assign(recv_buffer.data() + sizeof(uint16_t),
+		std::string output_file_name;
+		output_file_name.assign(recv_buffer.data() + sizeof(uint16_t),
                                 bytes_received - sizeof(uint16_t));
+		output_file_path = root_path + output_file_name;
         setRecvTimeout(server_socket, 10);
       } else if (cmd == CMD_DATA) {
         // Extract sequence number from the response
@@ -153,7 +162,7 @@ int main(int argc, char *argv[]) {
         }
 
         std::cout << currentRFC3339Time() << ", DATA, " << received_seq_num << std::endl;
-        if (bytes_received > sizeof(uint16_t) + sizeof(uint32_t)) {
+        if (bytes_received > (ssize_t)(sizeof(uint16_t) + sizeof(uint32_t))) {
           received_chunks[received_seq_num] = std::vector<char>(
               recv_buffer.begin() + sizeof(uint16_t) + sizeof(uint32_t),
               recv_buffer.begin() + bytes_received);
