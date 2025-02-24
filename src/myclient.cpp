@@ -23,7 +23,7 @@ using namespace std;
 #define handle_error(msg) \
 	   do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
-#define DEBUG 1
+// #define DEBUG 1
 #ifdef DEBUG
 #define dprintf printf
 #else
@@ -118,7 +118,7 @@ class SWPQueue {
 				if(!it->second->isAckSet(sender_id))
 					count++;
 			}
-			printf("Queue Size for Sender %d is %d\n", sender_id, count);
+			dprintf("Queue Size for Sender %d is %d\n", sender_id, count);
 			return count;
 		}
 		void setEOF(bool eof) {
@@ -296,7 +296,7 @@ int SWPSender::send_chunk_data() {
 		}
 		if(send_buffer->getRetryCount(_sender_id) == 5) {
 			it->second->setAckBit(_sender_id, true);
-			continue;
+			return -1;
 		}
 
 		std::cout << currentRFC3339Time() << ", DATA, " << it->first << ", " << basesn << ", " << nextsn << ", " << basesn + _winsz <<  endl;
@@ -307,7 +307,7 @@ int SWPSender::send_chunk_data() {
 									0, (struct sockaddr *)_server_addr, sizeof(*_server_addr));
         if (bytes_sent < 0) {
             perror("Error sending packet");
-            return -1;
+            return -2;
         }
 		send_buffer->incRetryCount(_sender_id);
 	}
@@ -315,7 +315,7 @@ int SWPSender::send_chunk_data() {
 }
 
 int SWPSender::recv_chunk_ack() {
-	setRecvTimeout(_sockfd, 1);
+	setRecvTimeout(_sockfd, 5);
 
 	uint32_t basesn = 0;
 	if(_queue->_chunks.begin() != _queue->_chunks.end()) {
@@ -329,10 +329,8 @@ int SWPSender::recv_chunk_ack() {
 		std::vector<char> recv_buffer(_mtu);	
 		ssize_t bytes_received = recvfrom(_sockfd, recv_buffer.data(), _mtu, 0,
                                           NULL, NULL);
-        if (bytes_received < 0) {
-            std::cerr << "Cannot detect server" << std::endl;
-            break;
-        }
+        if (bytes_received < 0)
+			return -1;
 
 		// dprintf("Bytes received: %ld\n", bytes_received);
 
@@ -344,12 +342,12 @@ int SWPSender::recv_chunk_ack() {
 
 		if(received_cmd == CMD_ERROR) {
 			printf("Received Error. Error code is: %ud\n", received_seq_number);
-			return -1;
+			return -2;
 		}
 
 		if(received_cmd != CMD_ACK) {
 			perror("Invalid ACK Packet\n");
-			return -1;
+			return -3;
 		}
 
 		std::map<uint32_t, auto_ptr<SWPChunk>>::iterator it = _queue->_chunks.find(received_seq_number);
@@ -396,12 +394,12 @@ int sendPutPacket(int sockfd, sockaddr_in *server_addr, const char *filename) {
 	if (bytes_received < 0) {
 		dprintf("Bytes received: %ld", bytes_received);
 		perror("Cannot detect server\n");
-		return -1;
+		return -2;
     }
 
 	if(bytes_received < (ssize_t)(sizeof(uint16_t) + sizeof(uint32_t))) {
 		perror("Unexpected Buffer Size\n");
-		return -1;
+		return -3;
 	}
 	
 	uint32_t received_seq_number;
@@ -410,17 +408,17 @@ int sendPutPacket(int sockfd, sockaddr_in *server_addr, const char *filename) {
 	
 	if(cmd == CMD_ERROR) {
 		printf("Received Error. Error code is: %ud\n", received_seq_number);
-		return -1;
+		return -4;
 	}
 
 	if(cmd != CMD_ACK) {
 		perror("Invalid ACK Packet\n");
-		return -1;
+		return -5;
 	}
 
 	if(received_seq_number != 0) {
 		perror("Invalid Sequence Number in ACK Packet\n");
-		return -1;
+		return -6;
 	}
 	
 	dprintf("Successful PUT packet.\n");
@@ -560,7 +558,12 @@ sender_thread(void *arg) {
 	dprintf("S: sending put packet\n");
 	int ret_val = sendPutPacket(client_socket, &server_addr, param->outfile_path.c_str());
 
-	if(ret_val < -1) {
+	if(ret_val < 0) {
+		if(ret_val >= -2) {
+			cerr << "Server is down IP " << param->server_ip << " port " 
+				<< param->server_port << endl;
+			exit(5);
+		}
         close(client_socket);
         return NULL;	
 	}
@@ -585,8 +588,10 @@ sender_thread(void *arg) {
 			break;
 		ret_val = swp_sender.send_chunk_data();
 		if(ret_val < 0) {
-			cerr << "S: send chunk data failure" << endl;
-        	return NULL;
+			cerr << "Reached max re-transmission limit IP " << param->server_ip.c_str() 
+				<< endl;
+			exit(4);
+        	// return NULL;
 		}
 
 		if(queue_size == 0 && param->queue->isEOF())
@@ -598,6 +603,11 @@ sender_thread(void *arg) {
 		
 		ret_val = swp_sender.recv_chunk_ack();
 		if(ret_val < 0) {
+			if(ret_val == -1) {
+				cerr << "Cannot detect server IP " << param->server_ip.c_str() << " port "
+					<< param->server_port << endl;
+				exit(3);
+			}
 			dprintf("receive ACK failure");
         	close(client_socket);
         	return NULL;
@@ -615,7 +625,7 @@ sender_thread(void *arg) {
 	return NULL;
 }
 
-void readServerConfig(string config_file, vector<pair<string, int>> &arr) {
+int readServerConfig(string config_file, vector<pair<string, int>> &arr) {
 	ifstream ifs (config_file, ifstream::in);
 	
 	while(ifs.good() && !ifs.eof()) {
@@ -631,13 +641,13 @@ void readServerConfig(string config_file, vector<pair<string, int>> &arr) {
 		char *port = strtok(NULL, " ");
 
 		if(ip == NULL || port == NULL) {
-			dprintf("malformed config line: %s\n", line);
-			continue;
+			return -1;
 		}
 		dprintf("IP: %s, Port: %s\n", ip, port);
 		arr.push_back(make_pair(string(ip), stoi(port)));
 	}
 	ifs.close();
+	return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -664,11 +674,16 @@ int main(int argc, char *argv[]) {
 	}
 	
 	vector<pair<string, int>> servers;
-	readServerConfig(serv_conf, servers);
+	int ret = readServerConfig(serv_conf, servers);
+	if(ret == -1) {
+		cerr << "Malformed config file!" << endl;
+		exit(6);
+	}
 
 	int sender_count = servn;
 	if(sender_count > (int)servers.size()) {
-		sender_count = servers.size();
+		cerr << "Calling more servers than provided in your config file!" << endl;
+		return EXIT_FAILURE;
 	}
 	SWPQueue queue(sender_count);
 	reader_param r_param = {mtu, winsz, input_file_path, &queue};
