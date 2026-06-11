@@ -1,0 +1,2 @@
+UDP File Replication — sample upload payload.
+Multi-replica fan-out and Go-Back-N reliability demo.

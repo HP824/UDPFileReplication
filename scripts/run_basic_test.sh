@@ -7,6 +7,13 @@ cd "$ROOT"
 
 mkdir -p test/roots/replica1 test/roots/replica2 test/input test/logs
 
+if [[ ! -f test/input/sample.txt ]]; then
+  cat > test/input/sample.txt <<'EOF'
+UDP File Replication — sample upload payload.
+Multi-replica fan-out and Go-Back-N reliability demo.
+EOF
+fi
+
 if [[ ! -x bin/myserver || ! -x bin/myclient ]]; then
   echo "Building binaries..."
   make

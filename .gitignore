@@ -1,4 +1,6 @@
 bin/*
 test/*
+!test/input/
+!test/input/sample.txt
 test2/*
 

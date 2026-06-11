@@ -12,6 +12,9 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <pthread.h>
+#include <atomic>
+#include <iomanip>
+#include <sstream>
 
 using namespace std;
 
@@ -102,8 +105,10 @@ class GBNWindow {
 		bool _eof;
 		int _sender_count;
 		int _senders;
+		atomic<uint64_t> _retransmits;
 
 		GBNWindow(int sender_count);
+		uint64_t retransmits() const { return _retransmits.load(); }
 		int inFlightCount() const {
 			return _packets.size();
 		}
@@ -147,6 +152,7 @@ GBNWindow::GBNWindow(int sender_count) {
 	_eof = false;
 	_sender_count = sender_count;
 	_senders = 0;
+	_retransmits = 0;
 }
 
 class GBNReader {
@@ -269,8 +275,10 @@ int GBNSender::sendWindow() {
 
 		_packets_in_flight++;
 
-		if (it->second->getRetryCount(_sender_id) != 0)
+		if (it->second->getRetryCount(_sender_id) != 0) {
 			cerr << "Packet loss detected" << endl;
+			_window->_retransmits++;
+		}
 		if (it->second->getRetryCount(_sender_id) == MAX_RETRIES) {
 			it->second->setAcked(_sender_id, true);
 			return -1;
@@ -408,6 +416,51 @@ int checkFile(const char* file_path) {
 		return -1;
 	}
 	return 0;
+}
+
+static string formatFileSize(off_t bytes) {
+	ostringstream oss;
+	oss << fixed << setprecision(1);
+	if (bytes < 1024) {
+		oss << bytes << " B";
+	} else if (bytes < 1024 * 1024) {
+		oss << (static_cast<double>(bytes) / 1024.0) << " KB";
+	} else {
+		oss << (static_cast<double>(bytes) / (1024.0 * 1024.0)) << " MB";
+	}
+	return oss.str();
+}
+
+static double elapsedSeconds(const timeval &start, const timeval &end) {
+	return (end.tv_sec - start.tv_sec) +
+	       (end.tv_usec - start.tv_usec) / 1'000'000.0;
+}
+
+static void printTransferSummary(const string &file_path, int replica_count,
+                                 const timeval &start, const timeval &end,
+                                 uint64_t retransmits) {
+	struct stat sb;
+	off_t file_size = 0;
+	if (stat(file_path.c_str(), &sb) == 0)
+		file_size = sb.st_size;
+
+	double duration = elapsedSeconds(start, end);
+	double throughput_mbps = 0.0;
+	if (duration > 0.0)
+		throughput_mbps =
+			(static_cast<double>(file_size) / (1024.0 * 1024.0)) / duration;
+
+	cout << endl;
+	cout << "Transfer complete" << endl;
+	cout << "  File:        " << file_path << " (" << formatFileSize(file_size)
+	     << ")" << endl;
+	cout << "  Replicas:    " << replica_count << "/" << replica_count << " OK"
+	     << endl;
+	cout << "  Duration:    " << fixed << setprecision(2) << duration << "s"
+	     << endl;
+	cout << "  Retransmits: " << retransmits << endl;
+	cout << "  Throughput:  " << fixed << setprecision(2) << throughput_mbps
+	     << " MB/s" << endl;
 }
 
 typedef struct reader_param_t {
@@ -657,6 +710,9 @@ int main(int argc, char *argv[]) {
 	GBNWindow window(sender_count);
 	reader_param r_param = {mtu, winsz, input_file_path, &window};
 
+	timeval transfer_start{};
+	gettimeofday(&transfer_start, NULL);
+
 	pthread_t reader_tid;
 	int s = pthread_create(&reader_tid, NULL, &reader_thread, &r_param);
 	if (s != 0)
@@ -693,6 +749,10 @@ int main(int argc, char *argv[]) {
 	}
 
 	free(s_param);
-	cout << "File transfer completed successfully!" << endl;
+
+	timeval transfer_end{};
+	gettimeofday(&transfer_end, NULL);
+	printTransferSummary(input_file_path, sender_count, transfer_start,
+	                     transfer_end, window.retransmits());
 	return EXIT_SUCCESS;
 }

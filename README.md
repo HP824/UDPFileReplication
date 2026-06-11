@@ -1,16 +1,65 @@
 # UDP File Replication
 
-A custom UDP file replication protocol with Go-Back-N reliability on the client. The client reads a local file and uploads it to one or more replica servers; each server stores the file under a configurable root directory.
+![CI](https://github.com/HP824/UDPFileReplication/actions/workflows/ci.yml/badge.svg)
+
+> Custom UDP file replication with Go-Back-N reliability and multi-replica fan-out.
+
+A C++ client reads a local file and uploads it to one or more UDP replica servers. The client implements a Go-Back-N sliding window with retransmission; each server ACKs packets and stores the file under a configurable root. Packet loss can be injected on the server to demonstrate ARQ recovery.
+
+## Quick demo
+
+Requires Linux with `g++` and `pthread` ([WSL](https://learn.microsoft.com/en-us/windows/wsl/) works on Windows).
+
+```bash
+bash scripts/demo.sh
+```
+
+This runs a two-replica upload with verification, then a lossy transfer with `droppc=5` and prints drop statistics from the server log.
+
+## What I built
+
+- **Go-Back-N client** — sliding send window, timeout-driven retransmission, per-packet ACK tracking
+- **Multi-replica fan-out** — one reader thread fills a shared window; one sender thread per replica
+- **Loss injection** — server `droppc` randomly drops DATA and ACK packets for testing
+- **Automated verification** — bash scripts build, transfer, and `cmp` byte-identical copies on every replica
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Client["myclient"]
+        Reader["GBNReader\n(reads file → window)"]
+        Win["GBNWindow\nshared send window"]
+        S1["GBNSender\nreplica 1"]
+        S2["GBNSender\nreplica 2"]
+        Reader --> Win
+        Win --> S1
+        Win --> S2
+    end
+
+    subgraph Servers["myserver × N"]
+        R1["Replica 1"]
+        R2["Replica 2"]
+    end
+
+    S1 -->|UDP PUT / DATA / ACK| R1
+    S2 -->|UDP PUT / DATA / ACK| R2
+```
+
+| Component | Role |
+|-----------|------|
+| `GBNReader` | Reads input file in MSS-sized chunks; fills window up to `winsz` |
+| `GBNWindow` | Shared map of in-flight packets; tracks per-replica ACK state |
+| `GBNSender` | One thread per replica: PUT handshake, send window, recv ACKs |
+| `myserver` | Receives packets, ACKs each DATA, writes reassembled file |
 
 ## Build
-
-Requires a Linux environment with `g++` and `pthread` (WSL works on Windows).
 
 ```bash
 make
 ```
 
-Binaries are written to `bin/myclient` and `bin/myserver`.
+Binaries: `bin/myclient`, `bin/myserver`.
 
 ```bash
 make clean   # remove bin/*
@@ -36,7 +85,7 @@ Example:
 ./bin/myserver 9100 0 test/roots/replica1
 ```
 
-With `droppc > 0`, the server randomly drops incoming DATA packets and outgoing ACKs to exercise client retransmissions. Server logs include timestamps, client address, and event type (`DATA`, `ACK`, `DROP DATA`, `DROP ACK`).
+With `droppc > 0`, the server randomly drops incoming DATA packets and outgoing ACKs. Server logs include timestamps, client address, and event type (`DATA`, `ACK`, `DROP DATA`, `DROP ACK`).
 
 ### Client
 
@@ -59,6 +108,8 @@ Example:
 ./bin/myclient 2 servaddr.conf 1400 8 test/input/sample.txt uploads/sample.txt
 ```
 
+On success the client prints a transfer summary (file size, replica count, duration, retransmits, throughput).
+
 ### Server config (`servaddr.conf`)
 
 One server per line. Lines starting with `#` are comments.
@@ -68,7 +119,7 @@ One server per line. Lines starting with `#` are comments.
 127.0.0.1 9101
 ```
 
-## Protocol (brief)
+## Protocol
 
 1. Client sends `CMD_PUT` with the remote filename; server replies with `CMD_ACK`.
 2. Client sends `CMD_DATA` packets with sequence numbers and file chunks.
@@ -77,13 +128,11 @@ One server per line. Lines starting with `#` are comments.
 
 ## Testing
 
-Test fixtures and scripts are under `test/` and `scripts/`.
-
 ```bash
-# Build and run automated tests (from project root)
-bash scripts/run_basic_test.sh      # 2 replicas, no packet loss
-bash scripts/run_lossy_test.sh      # 1 replica, droppc=5
-bash scripts/run_lossy_test.sh 10   # custom drop rate
+bash scripts/demo.sh                 # full portfolio demo (recommended)
+bash scripts/run_basic_test.sh       # 2 replicas, no packet loss
+bash scripts/run_lossy_test.sh       # 1 replica, droppc=5
+bash scripts/run_lossy_test.sh 10    # custom drop rate
 ```
 
 ### Manual two-replica test
@@ -117,21 +166,27 @@ cmp test/input/sample.txt test/roots/replica2/uploads/sample.txt
 
 For loss testing, use a single server with a low `droppc` (5–10). Higher drop rates may cause ACK timeouts.
 
+## Tech stack
+
+C++17 · POSIX sockets · pthreads · UDP · Linux / WSL
+
 ## Project layout
 
 ```
 ├── Makefile
 ├── README.md
 ├── servaddr.conf          # example server list
+├── .github/workflows/     # CI (build + demo)
 ├── bin/                   # built binaries (gitignored)
 ├── scripts/
+│   ├── demo.sh            # end-to-end portfolio demo
 │   ├── run_basic_test.sh
 │   └── run_lossy_test.sh
 ├── src/
 │   ├── myclient.cpp       # Go-Back-N client with multi-replica threads
 │   └── myserver.cpp       # UDP receiver with optional packet drops
 └── test/
-    ├── input/             # sample upload files
-    ├── roots/             # per-replica storage roots
+    ├── input/sample.txt   # sample upload file
+    ├── roots/             # per-replica storage (created by tests)
     └── logs/              # server logs from test scripts
 ```
