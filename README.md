@@ -1,4 +1,4 @@
-# CSE156 Lab 4 — UDP File Replication
+# UDP File Replication
 
 A custom UDP file replication protocol with Go-Back-N reliability on the client. The client reads a local file and uploads it to one or more replica servers; each server stores the file under a configurable root directory.
 
